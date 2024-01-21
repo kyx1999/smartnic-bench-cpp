@@ -90,11 +90,11 @@ dma_args dma_args::parse(int argc, char *argv[]) {
     }
 
     if (!pci_dev_exist) {
-        std::cout << argv[0] << ": option pci_dev error" << std::endl;
+        std::cerr << argv[0] << ": option pci_dev error" << std::endl;
         exit(1);
     }
     if (!listen_addr_exist) {
-        std::cout << argv[0] << ": option listen_addr_exist error" << std::endl;
+        std::cerr << argv[0] << ": option listen_addr error" << std::endl;
         exit(2);
     }
 

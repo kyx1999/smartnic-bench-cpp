@@ -16,12 +16,12 @@ public:
 
     bench_runner(size_t num_workers);
 
-    template<typename T>
-    void run(void (*f)(size_t, bench_runner *, bench_stat *, T), T args) {
+    template<typename _Callable, typename... _Args>
+    void run(_Callable &&f, _Args &&... args) {
         for (size_t i = 0; i < this->num_workers; i++) {
             bench_stat *stat = new bench_stat();
             this->worker_stats.push_back(stat);
-            this->handlers.emplace_back(f, i, this, stat, args);
+            this->handlers.emplace_back(f, i, this, stat, args...);
         }
     };
 
