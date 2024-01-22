@@ -1,7 +1,7 @@
 #include "mods.h"
 
 void bootstrap_client(dma_args args) {
-
+    // TODO
 }
 
 void bootstrap_server(dma_args args) {

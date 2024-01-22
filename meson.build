@@ -7,7 +7,8 @@ project(
     ]
 )
 
-# incdir = include_directories('/opt/mellanox/doca/include')
+incdir = include_directories('/opt/mellanox/doca/include')
+
 add_global_arguments(
     '-O4',
     '-march=native',
@@ -25,5 +26,5 @@ src = [
 executable(
     'doca_dma',
     src,
-    # include_directories : incdir,
+    include_directories : incdir,
 )

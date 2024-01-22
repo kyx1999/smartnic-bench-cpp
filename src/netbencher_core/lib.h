@@ -9,7 +9,7 @@
 
 class bench_runner {
 public:
-    std::vector <std::thread> handlers;
+    std::vector<std::thread> handlers;
     std::vector<bench_stat *> worker_stats;
     size_t num_workers;
     std::atomic<bool> running{true};

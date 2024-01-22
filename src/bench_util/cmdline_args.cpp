@@ -19,7 +19,7 @@ dma_args dma_args::parse(int argc, char *argv[]) {
             {"latency_test", optional_argument, NULL, 'm'},
             {"batch_size",   optional_argument, NULL, 'n'},
             {"server",       optional_argument, NULL, 'o'},
-            {NULL,           0,                 NULL, 0}
+            {NULL, 0,                           NULL, 0}
     };
     int opt;
 
@@ -95,8 +95,12 @@ dma_args dma_args::parse(int argc, char *argv[]) {
     }
     if (!listen_addr_exist) {
         std::cerr << argv[0] << ": option listen_addr error" << std::endl;
-        exit(2);
+        exit(1);
     }
 
     return ret;
+}
+
+void dma_args::coordinate() {
+    // TODO
 }

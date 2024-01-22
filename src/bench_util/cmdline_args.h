@@ -2,14 +2,13 @@
 #define _CMDLINE_ARGS_
 
 #include <iostream>
-#include <string>
 #include <vector>
 
 #include <getopt.h>
 
 class dma_args {
 public:
-    std::vector <std::string> pci_dev;
+    std::vector<std::string> pci_dev;
     uint64_t random_space = 10 * 1024;
     uint32_t life = 15;
     std::string listen_addr;
@@ -26,6 +25,8 @@ public:
     bool server = false;
 
     static dma_args parse(int argc, char *argv[]);
+
+    void coordinate();
 };
 
 #endif

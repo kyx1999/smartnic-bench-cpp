@@ -2,6 +2,7 @@
 #define _REPORTER_MODS_
 
 class bench_stat {
+    // TODO
 };
 
 #endif
