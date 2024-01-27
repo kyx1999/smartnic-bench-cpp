@@ -7,6 +7,7 @@ project(
     ]
 )
 
+dep = dependency('doca')
 incdir = include_directories('/opt/mellanox/doca/include')
 
 add_global_arguments(
@@ -26,5 +27,6 @@ src = [
 executable(
     'doca_dma',
     src,
-    include_directories : incdir,
+    dependencies : dep,
+    include_directories : incdir
 )
