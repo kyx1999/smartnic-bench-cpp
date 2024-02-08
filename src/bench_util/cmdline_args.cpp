@@ -4,84 +4,93 @@ dma_args dma_args::parse(int argc, char *argv[]) {
     dma_args ret;
 
     struct option dma_cmdline_args[] = {
-            {"pci_dev",      required_argument, NULL, 'a'},
-            {"random_space", optional_argument, NULL, 'b'},
-            {"life",         optional_argument, NULL, 'c'},
-            {"listen_addr",  required_argument, NULL, 'd'},
-            {"huge_page",    optional_argument, NULL, 'e'},
-            {"client_id",    optional_argument, NULL, 'f'},
-            {"threads",      optional_argument, NULL, 'g'},
-            {"payload",      optional_argument, NULL, 'h'},
-            {"local_mr",     optional_argument, NULL, 'i'},
-            {"read",         optional_argument, NULL, 'j'},
-            {"fixed",        optional_argument, NULL, 'k'},
-            {"thread_gap",   optional_argument, NULL, 'l'},
-            {"latency_test", optional_argument, NULL, 'm'},
-            {"batch_size",   optional_argument, NULL, 'n'},
-            {"server",       optional_argument, NULL, 'o'},
-            {NULL, 0,                           NULL, 0}
+            {"pci_dev",      required_argument, nullptr, 'a'},
+            {"rep_pci_dev",  optional_argument, nullptr, 'b'},
+            {"random_space", optional_argument, nullptr, 'c'},
+            {"life",         optional_argument, nullptr, 'd'},
+            {"listen_addr",  optional_argument, nullptr, 'e'},
+            {"huge_page",    optional_argument, nullptr, 'f'},
+            {"client_id",    optional_argument, nullptr, 'g'},
+            {"threads",      optional_argument, nullptr, 'h'},
+            {"payload",      optional_argument, nullptr, 'i'},
+            {"local_mr",     optional_argument, nullptr, 'j'},
+            {"read",         optional_argument, nullptr, 'k'},
+            {"fixed",        optional_argument, nullptr, 'l'},
+            {"thread_gap",   optional_argument, nullptr, 'm'},
+            {"latency_test", optional_argument, nullptr, 'n'},
+            {"batch_size",   optional_argument, nullptr, 'o'},
+            {"server",       optional_argument, nullptr, 'p'},
+            {nullptr, 0,                        nullptr, 0}
     };
     int opt;
 
     bool pci_dev_exist = false;
-    bool listen_addr_exist = false;
 
-    while ((opt = getopt_long_only(argc, argv, "a:b:c:d:ef:g:h:i:jkl:mn:o", dma_cmdline_args, NULL)) != -1) {
-        uint64_t i = 0;
-        uint64_t last_i = 0;
+    while ((opt = getopt_long_only(argc, argv, "a:b:c:d:e:fg:h:i:j:klm:no:p", dma_cmdline_args, nullptr)) != -1) {
+        size_t i = 0;
+        size_t last_i = 0;
         switch (opt) {
             case 'a':
                 while (optarg[i] != '\0') {
                     if (optarg[i] == ' ' || optarg[i] == ',' || optarg[i] == '\n') {
-                        ret.pci_dev.push_back(std::string(optarg + last_i, i - last_i));
+                        ret.pci_dev.emplace_back(optarg + last_i, i - last_i);
                         last_i = i + 1;
                     }
                     i++;
                 }
-                ret.pci_dev.push_back(std::string(optarg + last_i));
+                ret.pci_dev.emplace_back(optarg + last_i);
                 pci_dev_exist = true;
                 break;
             case 'b':
-                ret.random_space = std::stoull(optarg);
+                while (optarg[i] != '\0') {
+                    if (optarg[i] == ' ' || optarg[i] == ',' || optarg[i] == '\n') {
+                        ret.rep_pci_dev.emplace_back(optarg + last_i, i - last_i);
+                        last_i = i + 1;
+                    }
+                    i++;
+                }
+                ret.rep_pci_dev.emplace_back(optarg + last_i);
                 break;
             case 'c':
-                ret.life = std::stoul(optarg);
+                ret.random_space = std::stoull(optarg);
                 break;
             case 'd':
-                ret.listen_addr = std::string(optarg);
-                listen_addr_exist = true;
+                ret.life = std::stoul(optarg);
                 break;
             case 'e':
-                ret.huge_page = true;
+                ret.listen_addr = std::string(optarg);
                 break;
             case 'f':
-                ret.client_id = std::stoull(optarg);
+                ret.huge_page = true;
                 break;
             case 'g':
-                ret.threads = std::stoull(optarg);
+                ret.client_id = std::stoull(optarg);
                 break;
             case 'h':
-                ret.payload = std::stoull(optarg);
+                ret.threads = std::stoull(optarg);
                 break;
             case 'i':
-                ret.local_mr = std::stoull(optarg);
+                ret.payload = std::stoull(optarg);
                 break;
             case 'j':
-                ret.read = true;
+                ret.local_mr = std::stoull(optarg);
                 break;
             case 'k':
-                ret.fixed = true;
+                ret.read = true;
                 break;
             case 'l':
-                ret.thread_gap = std::stoull(optarg);
+                ret.fixed = true;
                 break;
             case 'm':
-                ret.latency_test = true;
+                ret.thread_gap = std::stoull(optarg);
                 break;
             case 'n':
-                ret.batch_size = std::stoull(optarg);
+                ret.latency_test = true;
                 break;
             case 'o':
+                ret.batch_size = std::stoull(optarg);
+                break;
+            case 'p':
                 ret.server = true;
                 break;
             default:
@@ -93,14 +102,13 @@ dma_args dma_args::parse(int argc, char *argv[]) {
         std::cerr << argv[0] << ": option pci_dev error" << std::endl;
         exit(1);
     }
-    if (!listen_addr_exist) {
-        std::cerr << argv[0] << ": option listen_addr error" << std::endl;
-        exit(1);
-    }
 
     return ret;
 }
 
 void dma_args::coordinate() {
-    // TODO
+    this->local_mr = std::max(((uint64_t) this->batch_size) * this->payload, this->local_mr);
+    this->thread_gap = std::max(this->payload, this->thread_gap);
+    this->random_space = std::max(this->payload, this->random_space);
+    this->random_space = std::max(this->threads * this->thread_gap, this->random_space);
 }

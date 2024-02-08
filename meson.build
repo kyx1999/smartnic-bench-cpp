@@ -1,5 +1,6 @@
 project(
     'smartnic-bench-cpp',
+    'c',
     'cpp',
     license : 'MIT',
     default_options : [
@@ -18,8 +19,13 @@ add_global_arguments(
 
 # doca_dma
 src = [
+    'src/bench_util/lib.cpp',
     'src/bench_util/cmdline_args.cpp',
     'src/netbencher_core/lib.cpp',
+    'src/netbencher_core/reporter/simple_bench_reporter.cpp',
+    'src/doca_dma/core/pack.c',
+    'src/doca_dma/core/core.cpp',
+    'src/doca_dma/bootstrap/client_construct.cpp',
     'src/doca_dma/bootstrap/server_construct.cpp',
     'src/doca_dma/bootstrap/mods.cpp',
     'src/doca_dma/doca_dma.cpp'

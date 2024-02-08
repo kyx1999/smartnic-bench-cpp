@@ -1,80 +1,268 @@
-#include "server_construct.h" // TODO 所有doca库的销毁
+#include "server_construct.h"
 
-std::pair<doca_mmap *, size_t> open_doca_device(std::vector<std::string> pci_devs) {
-    size_t num_dev = pci_devs.size();
-    doca_mmap **local_mmap = NULL;
-    if (doca_mmap_create(local_mmap) != DOCA_SUCCESS) {
+static doca_error_t host_negotiate_dma_direction_and_size(dma_args *args, struct doca_comm_channel_ep_t *ep,
+                                                          struct doca_comm_channel_addr_t **peer_addr) {
+    struct cc_msg_dma_direction host_dma_direction = {};
+    struct cc_msg_dma_direction dpu_dma_direction = {};
+    struct timespec ts = {
+            .tv_sec = 0,
+            .tv_nsec = SLEEP_IN_NANOS,
+    };
+    doca_error_t result;
+    size_t msg_len;
+
+    result = doca_comm_channel_ep_connect(ep, SERVER_NAME, peer_addr); // SERVER_NAME双方必须一致 此处得到peer_addr
+    if (result != DOCA_SUCCESS) {
+        std::cerr << "doca_comm_channel_ep_connect error" << std::endl;
+        return result;
+    }
+
+    while ((result = doca_comm_channel_peer_addr_update_info(*peer_addr)) ==
+           DOCA_ERROR_CONNECTION_INPROGRESS) // 等待连接建立完成
+        nanosleep(&ts, &ts); // 小睡10微秒
+
+    if (result != DOCA_SUCCESS) {
+        std::cerr << "doca_comm_channel_peer_addr_update_info error" << std::endl;
+        return result;
+    }
+
+    /* First byte indicates if file is located on Host, other 4 bytes determine file size */
+    if (args->read) {
+        host_dma_direction.space_size = htonq(args->random_space);
+        host_dma_direction.host_to_dpu = true;
+    } else {
+        host_dma_direction.host_to_dpu = false;
+    }
+
+    while ((result = doca_comm_channel_ep_sendto(ep, &host_dma_direction, sizeof(host_dma_direction),
+                                                 DOCA_CC_MSG_FLAG_NONE, *peer_addr)) == DOCA_ERROR_AGAIN)
+        nanosleep(&ts, &ts);
+
+    if (result != DOCA_SUCCESS) {
+        std::cerr << "doca_comm_channel_ep_sendto error" << std::endl;
+        return result;
+    }
+
+    msg_len = sizeof(struct cc_msg_dma_direction);
+    while ((result = doca_comm_channel_ep_recvfrom(ep, (void *) &dpu_dma_direction, &msg_len, DOCA_CC_MSG_FLAG_NONE,
+                                                   peer_addr)) == DOCA_ERROR_AGAIN) {
+        nanosleep(&ts, &ts);
+        msg_len = sizeof(struct cc_msg_dma_direction);
+    }
+    if (result != DOCA_SUCCESS) {
+        std::cerr << "doca_comm_channel_ep_recvfrom error" << std::endl;
+        return result;
+    }
+
+    if (msg_len != sizeof(struct cc_msg_dma_direction)) {
+        std::cerr << "doca_comm_channel_ep_recvfrom error" << std::endl;
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (!args->read)
+        args->random_space = ntohq(dpu_dma_direction.space_size);
+
+    return DOCA_SUCCESS;
+}
+
+static doca_error_t
+wait_for_successful_status_msg(struct doca_comm_channel_ep_t *ep, struct doca_comm_channel_addr_t **peer_addr) {
+    struct cc_msg_dma_status msg_status = {};
+    doca_error_t result;
+    size_t msg_len, status_msg_len = sizeof(struct cc_msg_dma_status);
+    struct timespec ts = {
+            .tv_sec = 0,
+            .tv_nsec = SLEEP_IN_NANOS,
+    };
+
+    msg_len = status_msg_len;
+    while ((result = doca_comm_channel_ep_recvfrom(ep, (void *) &msg_status, &msg_len, DOCA_CC_MSG_FLAG_NONE,
+                                                   peer_addr)) == DOCA_ERROR_AGAIN) {
+        nanosleep(&ts, &ts);
+        msg_len = status_msg_len;
+    }
+    if (result != DOCA_SUCCESS) {
+        std::cerr << "doca_comm_channel_ep_recvfrom error" << std::endl;
+        return result;
+    }
+
+    if (!msg_status.is_success) {
+        std::cerr << "doca_comm_channel_ep_recvfrom error" << std::endl;
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    return DOCA_SUCCESS;
+}
+
+static doca_error_t
+host_export_memory_map_to_dpu(struct doca_mmap *mmap, struct doca_dev *dev, struct doca_comm_channel_ep_t *ep,
+                              struct doca_comm_channel_addr_t **peer_addr, const void **export_desc) {
+    doca_error_t result;
+    size_t export_desc_len;
+    struct timespec ts = {
+            .tv_sec = 0,
+            .tv_nsec = SLEEP_IN_NANOS,
+    };
+
+    /* Export memory map to allow access to this memory region from DPU */
+    result = doca_mmap_export_pci(mmap, dev, export_desc, &export_desc_len);
+    if (result != DOCA_SUCCESS) {
+        std::cerr << "doca_mmap_export_pci error" << std::endl;
+        return result;
+    }
+
+    /* Send the memory map export descriptor to DPU */
+    while ((result = doca_comm_channel_ep_sendto(ep, *export_desc, export_desc_len, DOCA_CC_MSG_FLAG_NONE,
+                                                 *peer_addr)) == DOCA_ERROR_AGAIN)
+        nanosleep(&ts, &ts);
+
+    if (result != DOCA_SUCCESS) {
+        std::cerr << "doca_comm_channel_ep_sendto error" << std::endl;
+        return result;
+    }
+
+    result = wait_for_successful_status_msg(ep, peer_addr);
+    if (result != DOCA_SUCCESS) {
+        std::cerr << "wait_for_successful_status_msg error" << std::endl;
+        return result;
+    }
+
+    return DOCA_SUCCESS;
+}
+
+static doca_error_t
+host_send_addr_and_offset(const char *src_buffer, size_t src_buffer_size, struct doca_comm_channel_ep_t *ep,
+                          struct doca_comm_channel_addr_t **peer_addr) {
+    doca_error_t result;
+    struct timespec ts = {
+            .tv_sec = 0,
+            .tv_nsec = SLEEP_IN_NANOS,
+    };
+
+    /* Send the full buffer address and length */
+    uint64_t addr_to_send = htonq((uintptr_t) src_buffer);
+    uint64_t length_to_send = htonq((uint64_t) src_buffer_size);
+
+    while ((result = doca_comm_channel_ep_sendto(ep, &addr_to_send, sizeof(addr_to_send), DOCA_CC_MSG_FLAG_NONE,
+                                                 *peer_addr)) == DOCA_ERROR_AGAIN)
+        nanosleep(&ts, &ts);
+
+    if (result != DOCA_SUCCESS) {
+        std::cerr << "doca_comm_channel_ep_sendto error" << std::endl;
+        return result;
+    }
+
+    result = wait_for_successful_status_msg(ep, peer_addr);
+    if (result != DOCA_SUCCESS) {
+        std::cerr << "wait_for_successful_status_msg error" << std::endl;
+        return result;
+    }
+
+    while ((result = doca_comm_channel_ep_sendto(ep, &length_to_send, sizeof(length_to_send), DOCA_CC_MSG_FLAG_NONE,
+                                                 *peer_addr)) == DOCA_ERROR_AGAIN)
+        nanosleep(&ts, &ts);
+
+    if (result != DOCA_SUCCESS) {
+        std::cerr << "doca_comm_channel_ep_sendto error" << std::endl;
+        return result;
+    }
+
+    result = wait_for_successful_status_msg(ep, peer_addr);
+    if (result != DOCA_SUCCESS) {
+        std::cerr << "wait_for_successful_status_msg error" << std::endl;
+        return result;
+    }
+
+    return result;
+}
+
+void perform_server_routine(size_t thread_id, bench_runner *runner, bench_stat *stat, dma_args *args,
+                            doca_comm_channel_ep_t *ep, doca_comm_channel_addr_t **peer_addr) {
+    struct doca_mmap *mmap = nullptr;
+    struct doca_dev *dev = nullptr;
+    char *buffer = nullptr;
+    const void *export_desc = nullptr;
+    doca_error_t result, tmp_result;
+
+    /* Negotiate DMA copy direction with DPU */
+    result = host_negotiate_dma_direction_and_size(args, ep, peer_addr); // 协商过后更新的信息在dma_cfg里 同时填充了peer_addr
+    if (result != DOCA_SUCCESS) {
+        std::cerr << "host_negotiate_dma_direction_and_size error" << std::endl;
+        exit(1);
+    }
+
+    /* Allocate memory to be used for read operation in case file is found locally, otherwise grant write access */
+    uint32_t dpu_access = args->read ? DOCA_ACCESS_FLAG_PCI_READ_ONLY : DOCA_ACCESS_FLAG_PCI_READ_WRITE;
+
+    /* Open DOCA dma device */
+    result = open_dma_device(&dev);
+    if (result != DOCA_SUCCESS) {
+        std::cerr << "open_dma_device error" << std::endl;
+        exit(1);
+    }
+
+    result = doca_mmap_create(&mmap);
+    if (result != DOCA_SUCCESS) {
         std::cerr << "doca_mmap_create error" << std::endl;
-        exit(1);
+        goto close_device;
     }
 
-    uint32_t n = 0; // TODO 这样写可以吗？
-    doca_devinfo ***dev_list = NULL;
-    doca_error_t ret = doca_devinfo_create_list(dev_list, &n);
-    if (n == 0 || ret != DOCA_SUCCESS) {
-        std::cerr << "doca_devinfo_create_list error" << std::endl;
-        exit(1);
+    result = doca_mmap_add_dev(mmap, dev);
+    if (result != DOCA_SUCCESS) {
+        std::cerr << "doca_mmap_add_dev error" << std::endl;
+        goto destroy_mmap;
     }
 
-    for (size_t i = 0; i < n; i++) {
-        for (const auto &d: pci_devs) {
-            char *name = NULL; // TODO 这样写可以吗？
-            if (doca_devinfo_get_pci_addr_str((*dev_list)[i], name) != DOCA_SUCCESS) {
-                std::cerr << "doca_devinfo_get_pci_addr_str error" << std::endl;
-                exit(1);
-            }
-            if (std::string(name) == d) {
-                doca_dev **ctx = NULL;
-                if (doca_dev_open((*dev_list)[i], ctx) != DOCA_SUCCESS) {
-                    std::cerr << "doca_dev_open error" << std::endl;
-                    exit(1);
-                }
-                if (doca_mmap_add_dev(*local_mmap, *ctx) != DOCA_SUCCESS) {
-                    std::cerr << "doca_mmap_add_dev error" << std::endl;
-                    exit(1);
-                }
-            }
-        }
+    result = memory_alloc_and_populate(args->huge_page, mmap, args->random_space, dpu_access, &buffer);
+    if (result != DOCA_SUCCESS) {
+        std::cerr << "memory_alloc_and_populate error" << std::endl;
+        goto destroy_mmap;
     }
 
-    return std::make_pair(*local_mmap, num_dev);
-}
-
-void send_doca_config(std::string addr, size_t num_dev, doca_mmap *dm, uint8_t *src_buf) {
-    // TODO
-}
-
-void perform_server_routine(size_t thread_id, bench_runner *runner, bench_stat *stat, dma_args args) {
-    for (const auto &d: args.pci_dev) {
-        std::cout << "pcie dev 0: " << d << std::endl;
+    /* Export memory map and send it to DPU */
+    result = host_export_memory_map_to_dpu(mmap, dev, ep, peer_addr, &export_desc);
+    if (result != DOCA_SUCCESS) {
+        std::cerr << "host_export_memory_map_to_dpu error" << std::endl;
+        goto free_buffer;
     }
 
-    uint8_t *src_region = NULL;
-    uint64_t capacity = round_up(args.random_space, 2 << 20);
-    if (args.huge_page) {
-        src_region = (uint8_t *) mmap(NULL, capacity, PROT_READ | PROT_WRITE,
-                                      MAP_PRIVATE | MAP_ANONYMOUS | MAP_POPULATE | MAP_HUGETLB, -1, 0);
-        if (src_region == MAP_FAILED) {
-            std::cerr << "Failed to create huge-page MR" << std::endl;
-            exit(1);
-        }
+    // 这里原本应放给buffer填充内容的代码
+
+    /* Send source buffer address and offset (entire buffer) to enable DMA and wait until DPU is done */
+    result = host_send_addr_and_offset(buffer, args->random_space, ep, peer_addr);
+    if (result != DOCA_SUCCESS) {
+        std::cerr << "host_send_addr_and_offset error" << std::endl;
+        goto free_buffer;
+    }
+
+    /* Wait to DPU status message to indicate DMA was ended */
+    result = wait_for_successful_status_msg(ep, peer_addr);
+    if (result != DOCA_SUCCESS) {
+        std::cerr << "wait_for_successful_status_msg error" << std::endl;
+        goto free_buffer;
+    }
+
+    if (!args->read) {
+        // result = print_buffer(dma_cfg, buffer);
+    }
+
+    free_buffer:
+    if (args->huge_page) {
+        munmap(buffer, round_up(args->random_space, 2 << 20));
     } else {
-        src_region = new uint8_t[args.random_space];
+        delete[] buffer;
     }
-
-    auto [local_mmap, num_dev] {open_doca_device(args.pci_dev)};
-    if (doca_mmap_set_memrange(local_mmap, src_region, getpagesize()) != DOCA_SUCCESS) {
-        std::cerr << "doca_mmap_set_memrange error" << std::endl;
+    destroy_mmap:
+    tmp_result = doca_mmap_destroy(mmap);
+    if (tmp_result != DOCA_SUCCESS) {
+        std::cerr << "doca_mmap_destroy error" << std::endl;
+    }
+    close_device:
+    tmp_result = doca_dev_close(dev);
+    if (tmp_result != DOCA_SUCCESS) {
+        std::cerr << "doca_dev_close error" << std::endl;
+    }
+    if (result != DOCA_SUCCESS) {
         exit(1);
     }
-
-    send_doca_config(args.listen_addr, num_dev, local_mmap, src_region);
-
-    if (args.huge_page) {
-        munmap(src_region, capacity);
-    } else {
-        delete[] src_region;
-    }
-
-    std::cout << "Server exit." << std::endl;
 }

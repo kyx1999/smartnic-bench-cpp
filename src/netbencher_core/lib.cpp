@@ -10,3 +10,8 @@ void bench_runner::stop() {
         t.join();
     }
 }
+
+std::string bench_runner::report(bench_reporter *reporter) {
+    // TODO
+    return {"temp"};
+}

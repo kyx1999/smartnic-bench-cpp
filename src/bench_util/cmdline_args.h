@@ -9,6 +9,7 @@
 class dma_args {
 public:
     std::vector<std::string> pci_dev;
+    std::vector<std::string> rep_pci_dev;
     uint64_t random_space = 10 * 1024;
     uint32_t life = 15;
     std::string listen_addr;
