@@ -9,16 +9,17 @@ project(
 )
 
 dep = dependency('doca')
+
 incdir = include_directories('/opt/mellanox/doca/include')
 
 add_global_arguments(
-    '-O4',
+    '-O3',
     '-march=native',
     language : 'cpp'
 )
 
 # doca_dma
-src = [
+doca_dma_src = [
     'src/bench_util/lib.cpp',
     'src/bench_util/cmdline_args.cpp',
     'src/netbencher_core/lib.cpp',
@@ -32,7 +33,7 @@ src = [
 ]
 executable(
     'doca_dma',
-    src,
+    doca_dma_src,
     dependencies : dep,
     include_directories : incdir
 )
